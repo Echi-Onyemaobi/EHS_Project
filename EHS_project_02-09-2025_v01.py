@@ -3,7 +3,10 @@ import random
 import json
 from datetime import datetime, timedelta
 from faker import Faker
-import matplotlib.pyplot as plt  # For visualization
+import matplotlib.pyplot as plt
+import io
+import base64
+from flask import Flask, request, jsonify
 
 fake = Faker()
 
@@ -276,8 +279,8 @@ def simulate_shift(shift="Day", shift_start_str=None, shift_end_str=None):
 
     # Define clinical roles eligible for patient appointments.
     clinical_roles = (
-        "Doctor", "Registered Nurse", "Nursing Assistant", "Respiratory Therapist", "Radiology Technician",
-        "Ophthalmic Technician", "Physical Therapist"
+        "Doctor", "Registered Nurse", "Nursing Assistant", "Respiratory Therapist",
+        "Radiology Technician", "Ophthalmic Technician", "Physical Therapist"
     )
     # Retrieve clinical staff on the specified shift.
     query = f"SELECT id, department_id FROM staff WHERE role IN {clinical_roles} AND shift = ?"
@@ -354,6 +357,7 @@ def generate_report():
     """
     Generates a report by querying the appointments table and then visualizes the
     distribution of appointment statuses (e.g., completed, cancelled) using a pie chart.
+    Returns the report as JSON and the pie chart image as a base64 encoded string.
     """
     conn = sqlite3.connect('hospital_simulation.db')
     cursor = conn.cursor()
@@ -374,26 +378,58 @@ def generate_report():
     plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140)
     plt.title("Appointment Status Distribution")
     plt.axis('equal')
-    plt.show()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    image_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    buf.close()
+    plt.close()
 
     conn.close()
+    return status_counts, image_base64
 
 
 ######################################
-# 8. Main Execution of the Simulation#
+# 8. Flask API Setup and Endpoints  #
 ######################################
-if __name__ == "__main__":
-    # Step 1: Create the database and tables.
+app = Flask(__name__)
+
+
+@app.route('/create_db', methods=['POST'])
+def api_create_db():
     create_db()
+    return jsonify({"message": "Database created from scratch."}), 200
 
-    # Step 2: Populate departments and staff.
+
+@app.route('/populate', methods=['POST'])
+def api_populate():
     department_ids = populate_departments_and_staff()
-
-    # Step 3: Populate patients.
     patient_ids = populate_patients()
+    return jsonify({
+        "message": "Database populated.",
+        "departments": department_ids,
+        "num_patients": len(patient_ids)
+    }), 200
 
-    # Step 4: Simulate a specific shift (e.g., the Day shift).
-    simulate_shift(shift="Day", shift_start_str="07:00", shift_end_str="19:00")
 
-    # Step 5: Generate report and visualization.
-    generate_report()
+@app.route('/simulate', methods=['POST'])
+def api_simulate():
+    data = request.get_json() or {}
+    shift = data.get('shift', 'Day')
+    shift_start_str = data.get('shift_start', None)
+    shift_end_str = data.get('shift_end', None)
+    simulate_shift(shift, shift_start_str, shift_end_str)
+    return jsonify({"message": f"Shift simulation completed for shift {shift}."}), 200
+
+
+@app.route('/report', methods=['GET'])
+def api_report():
+    status_counts, chart_image = generate_report()
+    return jsonify({
+        "report": status_counts,
+        "chart": chart_image
+    }), 200
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
